@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Precision Water Management: field model with pump</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{--s1:#cfe3ee;--s2:#eef3e4;--card:rgba(250,251,246,.92);--ink:#1B2A22;--mute:#5E6B62;--line:#c3cfbd;--acc:#2E6B45;--water:#2A7BA6;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--s1:#16222b;--s2:#1b261d;--card:rgba(26,36,30,.92);--ink:#E6EEE6;--mute:#98A79C;--line:#2C3A31;--acc:#58A878;--water:#5BB0DB}}
+:root[data-theme="dark"]{--s1:#16222b;--s2:#1b261d;--card:rgba(26,36,30,.92);--ink:#E6EEE6;--mute:#98A79C;--line:#2C3A31;--acc:#58A878;--water:#5BB0DB}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;overflow:hidden;color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:linear-gradient(var(--s1),var(--s2))}
+canvas{display:block;position:fixed;inset:0;width:100%;height:100%;touch-action:none;cursor:grab}
+canvas:active{cursor:grabbing}
+.h{font-family:"Bricolage Grotesque",system-ui,sans-serif;font-weight:700;letter-spacing:-.01em}
+.card{position:fixed;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;backdrop-filter:blur(6px)}
+#top{left:12px;top:calc(12px + env(safe-area-inset-top,0px));max-width:300px}
+#top h1{margin:0 0 2px;font-size:18px}
+#top p{margin:0;color:var(--mute);font-size:13px}
+.stat{display:flex;gap:16px;margin-top:10px}
+.stat b{display:block;font-size:22px;line-height:1.1}
+.stat span{font-size:12px;color:var(--mute)}
+#info{right:12px;top:calc(12px + env(safe-area-inset-top,0px));width:280px;font-size:13px}
+#info summary{cursor:pointer;font-weight:700}
+#info ul{margin:8px 0 0;padding-left:16px}
+#info li{margin:5px 0}
+#bar{left:50%;transform:translateX(-50%);width:max-content;max-width:94vw;bottom:calc(14px + env(safe-area-inset-bottom,0px));display:flex;gap:8px;padding:8px;flex-wrap:wrap;justify-content:center}
+button{font:inherit;font-weight:600;border:1px solid var(--line);background:none;color:var(--ink);border-radius:10px;padding:8px 12px;cursor:pointer}
+button.p{background:var(--acc);color:#fff;border-color:var(--acc)}
+button:disabled{opacity:.4;cursor:not-allowed}
+button:focus-visible,summary:focus-visible{outline:3px solid var(--water);outline-offset:2px}
+.lab{position:fixed;left:0;top:0;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:2px 8px;font-size:12px;font-weight:600;white-space:nowrap;transform:translate(-50%,-130%)}
+.lab:after{content:"";position:absolute;left:50%;bottom:-5px;width:1px;height:5px;background:var(--mute)}
+#err{display:none;position:fixed;inset:0;padding:40px;text-align:center}
+@media (max-width:700px){#info{left:12px;right:12px;width:auto;top:auto;bottom:calc(128px + env(safe-area-inset-bottom,0px));max-height:34vh;overflow:auto}#top{max-width:70vw}}
+</style>
+</head>
+<body>
+<div id="err">This browser could not start 3D graphics (WebGL). Try another browser or device.</div>
+<div class="card" id="top">
+  <h1 class="h">Precision Water Management</h1>
+  <p>3D model of the automatic irrigation system with a submersible pump. Drag to rotate, scroll or pinch to zoom.</p>
+  <div class="stat"><div><b id="sM">40%</b><span>Soil moisture</span></div><div><b id="sV">Off</b><span>Pump</span></div></div>
+</div>
+<details class="card" id="info"><summary>How the system works</summary>
+<ul>
+<li>The <b>soil sensor node</b> (ESP32 and capacitive sensor) reads moisture at root depth and sends it over Wi-Fi.</li>
+<li>The <b>pump controller</b> (ESP32 and relay) compares it with the start and stop levels, 35% and 60%.</li>
+<li>Below 35% the relay switches on the <b>submersible pump</b>. It draws water from the reservoir and pushes it through the pipe to the drip lines.</li>
+<li>At 60% the pump stops and a message goes to the <b>phone</b>.</li>
+<li>From the phone you can switch to manual mode and start or stop the pump.</li>
+</ul></details>
+<div class="card" id="bar">
+  <button id="bMode" class="p">Mode: Auto</button>
+  <button id="bValve" disabled>Start pump</button>
+  <button id="bLab">Hide labels</button>
+  <button id="bReset">Reset view</button>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+var $=function(i){return document.getElementById(i)};
+var renderer;
+try{renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});}catch(e){$('err').style.display='block';return;}
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+renderer.shadowMap.enabled=true;
+document.body.insertBefore(renderer.domElement,document.body.firstChild);
+var scene=new THREE.Scene(),camera=new THREE.PerspectiveCamera(45,1,.1,200);
+scene.add(new THREE.HemisphereLight(0xffffff,0x8a9a7a,.85));
+var sun=new THREE.DirectionalLight(0xffffff,.9);sun.position.set(-8,16,10);sun.castShadow=true;
+sun.shadow.mapSize.set(1024,1024);var sc=sun.shadow.camera;sc.left=-18;sc.right=18;sc.top=14;sc.bottom=-14;sc.near=1;sc.far=60;scene.add(sun);
+
+var mat=function(c,r,m){return new THREE.MeshStandardMaterial({color:c,roughness:r==null?.8:r,metalness:m||0})};
+var box=function(w,h,d){return new THREE.BoxGeometry(w,h,d)},cyl=function(r,h,s){return new THREE.CylinderGeometry(r,r,h,s||20)};
+function mesh(g,m,x,y,z,p){var o=new THREE.Mesh(g,m);o.position.set(x,y,z);o.castShadow=o.receiveShadow=true;(p||scene).add(o);return o;}
+var V3=function(x,y,z){return new THREE.Vector3(x,y,z)};
+
+/* ground and field */
+mesh(box(28,.3,16),mat(0x7d9467),-1,-.45,0);
+var soilMat=mat(0xc2a273,1);mesh(box(14,.4,9),soilMat,.5,-.2,0);
+var leafG=new THREE.IcosahedronGeometry(.3,0),stemG=cyl(.03,.35,6),leafM=mat(0x4f9a4a,.9),stemM=mat(0x3b7a38);
+var rows=[-3.2,-1.6,0,1.6,3.2];
+rows.forEach(function(z){for(var i=0;i<9;i++){var x=-4.4+i*1.25;mesh(stemG,stemM,x,.17,z);var l=mesh(leafG,leafM,x,.52,z);l.scale.set(1,.85+((i*z*7)%3)*.08,1);}});
+
+/* reservoir with submersible pump */
+var RX=-10,RZ=1;
+mesh(new THREE.CylinderGeometry(1.6,1.45,1.8,36,1,true),new THREE.MeshStandardMaterial({color:0xdfe9ef,roughness:.3,transparent:true,opacity:.3,side:THREE.DoubleSide}),RX,.9,RZ);
+mesh(cyl(1.45,.06,36),mat(0xdfe9ef,.4),RX,.03,RZ);
+var water=mesh(cyl(1.5,1.5,36),new THREE.MeshStandardMaterial({color:0x2a7ba6,roughness:.2,transparent:true,opacity:.55}),RX,.8,RZ);
+var pump=new THREE.Group();pump.position.set(RX,.5,RZ);scene.add(pump);
+mesh(cyl(.42,.8,24),mat(0xe6b400,.5),0,0,0,pump);
+mesh(cyl(.44,.1,24),mat(0xc9ccd1,.3,.8),0,.45,0,pump);
+mesh(cyl(.17,.4,14),mat(0x16161a,.5),.15,.7,0,pump);
+/* delivery pipe from pump to manifold */
+var pvc=mat(0x5b7fa6,.5,.1);
+var c1=new THREE.CatmullRomCurve3([V3(RX+.15,1.2,RZ),V3(RX+.15,2.4,RZ-.1),V3(-9,2.5,.4),V3(-8.1,1.2,.05),V3(-7.4,.45,0),V3(-5.8,.45,0)]);
+var pipe1=new THREE.Mesh(new THREE.TubeGeometry(c1,60,.11,10),pvc);pipe1.castShadow=true;scene.add(pipe1);
+var L1=c1.getLength();
+/* manifold and drip lines */
+var man=mesh(cyl(.11,7.6,12),pvc,-5.8,.45,0);man.rotation.x=Math.PI/2;
+var dripM=mat(0x22262a,.6);
+rows.forEach(function(z){var o=mesh(cyl(.045,12,8),dripM,.2,.4,z+.3);o.rotation.z=Math.PI/2;var c=mesh(cyl(.035,.3,8),pvc,-5.8,.43,z+.15);c.rotation.x=Math.PI/2;});
+
+/* controller box on a post */
+var CX=-7.4,CZ=2.4;
+mesh(cyl(.05,1.5,8),mat(0x555555),CX,.75,CZ);
+mesh(box(.9,.7,.4),mat(0xf2f2ee,.5),CX,1.75,CZ);
+var cLed=mesh(new THREE.SphereGeometry(.07,12,12),new THREE.MeshBasicMaterial({color:0xcc3333}),CX+.3,1.9,CZ+.22);
+function cable(pts,col,r){var cv=new THREE.CatmullRomCurve3(pts.map(function(p){return V3(p[0],p[1],p[2])}));var o=new THREE.Mesh(new THREE.TubeGeometry(cv,50,r||.04,6),new THREE.MeshStandardMaterial({color:col,roughness:.6}));o.castShadow=true;scene.add(o);}
+cable([[CX-.3,1.6,CZ],[-8.6,2.1,2.2],[-9.5,2.0,1.6],[RX-.2,.9,RZ+.3]],0x222222);          /* controller to pump */
+
+/* soil sensor node (ESP32 + sensor), wireless */
+var SX=1.2,SZ=.8;
+mesh(box(.07,1.4,.03),mat(0x1f7a5a,.4),SX,-.5,SZ);
+mesh(cyl(.04,1.5,8),mat(0x555555),SX,.75,SZ);
+mesh(box(.65,.5,.3),mat(0xf2f2ee,.5),SX,1.7,SZ);
+mesh(new THREE.SphereGeometry(.06,12,12),new THREE.MeshBasicMaterial({color:0x33cc66}),SX+.22,1.8,SZ+.17);
+mesh(cyl(.015,.5,6),mat(0x222222),SX-.2,2.2,SZ);
+
+/* phone with live screen */
+var cv=document.createElement('canvas');cv.width=256;cv.height=480;var cx=cv.getContext('2d'),tex=new THREE.CanvasTexture(cv);
+var phone=new THREE.Group();phone.position.set(7.2,1.5,5.3);phone.rotation.y=-.75;scene.add(phone);
+mesh(box(1.1,2,.1),mat(0x15191a,.3),0,0,0,phone);
+var scr=new THREE.Mesh(new THREE.PlaneGeometry(.98,1.84),new THREE.MeshBasicMaterial({map:tex}));scr.position.z=.056;phone.add(scr);
+mesh(cyl(.5,.1,24),mat(0x888888),7.2,.05,5.3);
+var lg=new THREE.BufferGeometry().setFromPoints([V3(CX,2.2,CZ),V3(7.2,2.2,5.3)]),ln=new THREE.Line(lg,new THREE.LineDashedMaterial({color:0x2a7ba6,dashSize:.3,gapSize:.2}));ln.computeLineDistances();scene.add(ln);
+var ln2=new THREE.Line(new THREE.BufferGeometry().setFromPoints([V3(SX,2.4,SZ),V3(7.2,2.2,5.3)]),new THREE.LineDashedMaterial({color:0x2a7ba6,dashSize:.3,gapSize:.2}));ln2.computeLineDistances();scene.add(ln2);
+var rA=[];[[CX,2.5,CZ],[SX,2.5,SZ]].forEach(function(q){for(var i=0;i<3;i++){var m=new THREE.MeshBasicMaterial({color:0x2a7ba6,transparent:true});var t=new THREE.Mesh(new THREE.TorusGeometry(.5,.025,6,40),m);t.rotation.x=Math.PI/2;t.position.set(q[0],q[1],q[2]);scene.add(t);rA.push(t);}});
+
+/* water particles */
+var pm=new THREE.MeshBasicMaterial({color:0x4fb3e8}),pg=new THREE.SphereGeometry(.075,8,8),P=[];
+for(var i=0;i<60;i++){var o=new THREE.Mesh(pg,pm);o.visible=false;scene.add(o);P.push({o:o,d:-(i%12)*.9,row:i%5,i:i});}
+function ppos(p){var z=rows[p.row]+.3,L2=Math.abs(z),L3=12,d=p.d;
+ if(d<L1){var q=c1.getPointAt(Math.max(0,d)/L1);return[q.x,q.y,q.z];}
+ d-=L1;if(d<L2)return[-5.8,.45,(z<0?-1:1)*d];
+ return[-5.8+(d-L2),.4,z];}
+
+/* labels */
+var LB=[["Water reservoir",-11.4,2.0,1],["Submersible pump",-9,3.1,1.2],["Pump controller (ESP32 + relay)",CX,2.7,CZ],["Soil sensor node (ESP32 + sensor)",SX,2.7,SZ],["Drip irrigation lines",3.2,.5,-2.9],["Crop rows",3.5,.9,2.6],["Phone app",7.2,2.7,5.3]].map(function(a){var d=document.createElement('div');d.className='lab';d.textContent=a[0];document.body.appendChild(d);return{d:d,v:V3(a[1],a[2],a[3])};});
+
+/* state */
+var S={m:40,pump:false,auto:true,tank:1,low:35,high:60,labels:true},dry=new THREE.Color(0xc2a273),wet=new THREE.Color(0x3e2b20);
+var C0={th:.95,ph:1.05,r:25,tx:-1.5,ty:1,tz:0},cam=Object.assign({},C0),idle=true;
+function place(){camera.position.set(cam.tx+cam.r*Math.sin(cam.ph)*Math.sin(cam.th),cam.ty+cam.r*Math.cos(cam.ph),cam.tz+cam.r*Math.sin(cam.ph)*Math.cos(cam.th));camera.lookAt(cam.tx,cam.ty,cam.tz);}
+var el=renderer.domElement,ptr={};
+el.addEventListener('pointerdown',function(e){el.setPointerCapture(e.pointerId);ptr[e.pointerId]=[e.clientX,e.clientY];idle=false;});
+el.addEventListener('pointerup',function(e){delete ptr[e.pointerId];});el.addEventListener('pointercancel',function(e){delete ptr[e.pointerId];});
+el.addEventListener('pointermove',function(e){var p=ptr[e.pointerId];if(!p)return;var ids=Object.keys(ptr);
+ if(ids.length==1){cam.th-=(e.clientX-p[0])*.006;cam.ph=Math.max(.25,Math.min(1.5,cam.ph-(e.clientY-p[1])*.006));}
+ else{var o=ptr[ids[0]==e.pointerId?ids[1]:ids[0]],d0=Math.hypot(p[0]-o[0],p[1]-o[1]),d1=Math.hypot(e.clientX-o[0],e.clientY-o[1]);cam.r=Math.max(8,Math.min(42,cam.r*d0/(d1||1)));}
+ ptr[e.pointerId]=[e.clientX,e.clientY];});
+el.addEventListener('wheel',function(e){e.preventDefault();idle=false;cam.r=Math.max(8,Math.min(42,cam.r*(1+e.deltaY*.001)));},{passive:false});
+if(window.matchMedia('(prefers-reduced-motion:reduce)').matches)idle=false;
+
+function draw(){cx.fillStyle='#10201a';cx.fillRect(0,0,256,480);cx.fillStyle='#e6eee6';cx.font='bold 20px sans-serif';cx.fillText('Plot A, tomato bed',16,38);
+ cx.fillStyle='#98a79c';cx.font='15px sans-serif';cx.fillText('Soil moisture',16,84);cx.fillStyle='#5bb0db';cx.font='bold 72px sans-serif';cx.fillText(Math.round(S.m)+'%',16,160);
+ cx.fillStyle='#24362c';cx.fillRect(16,184,224,12);cx.fillStyle='#5bb0db';cx.fillRect(16,184,224*S.m/100,12);
+ cx.fillStyle='#e6eee6';cx.font='bold 20px sans-serif';cx.fillText('Pump: '+(S.pump?'Running':'Off'),16,250);cx.fillText('Mode: '+(S.auto?'Auto':'Manual'),16,282);
+ cx.fillStyle=S.pump?'#d9715c':'#58a878';cx.fillRect(16,320,224,52);cx.fillStyle='#10201a';cx.fillText(S.pump?'Stop pump':'Start pump',60,354);
+ cx.fillStyle='#98a79c';cx.font='14px sans-serif';cx.fillText('Message: irrigation '+(S.pump?'started':'done'),16,420);tex.needsUpdate=true;}
+function ui(){$('sM').textContent=Math.round(S.m)+'%';$('sV').textContent=S.pump?'Running':'Off';
+ $('bMode').textContent='Mode: '+(S.auto?'Auto':'Manual');$('bMode').className=S.auto?'p':'';
+ $('bValve').disabled=S.auto;$('bValve').textContent=S.pump?'Stop pump':'Start pump';}
+$('bMode').onclick=function(){S.auto=!S.auto;ui();};
+$('bValve').onclick=function(){if(!S.auto){S.pump=!S.pump;ui();}};
+$('bLab').onclick=function(){S.labels=!S.labels;$('bLab').textContent=S.labels?'Hide labels':'Show labels';};
+$('bReset').onclick=function(){Object.assign(cam,C0);};
+if(window.innerWidth>700)$('info').open=true;
+function size(){var w=window.innerWidth,h=window.innerHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();}
+window.addEventListener('resize',size);size();ui();
+
+var last=performance.now(),acc=0,T=0;
+function loop(now){requestAnimationFrame(loop);var dt=Math.min(.05,(now-last)/1000);last=now;T+=dt;acc+=dt;
+ if(S.pump){S.m=Math.min(98,S.m+5*dt);S.tank=Math.max(.78,S.tank-.012*dt);}else{S.m=Math.max(5,S.m-1.5*dt);S.tank=Math.min(1,S.tank+.006*dt);}
+ if(S.auto){var was=S.pump;if(!S.pump&&S.m<S.low)S.pump=true;else if(S.pump&&S.m>=S.high)S.pump=false;if(was!==S.pump)ui();}
+ soilMat.color.copy(dry).lerp(wet,S.m/100);
+ water.scale.y=S.tank;water.position.y=.05+.75*S.tank;
+ pump.position.y=.5+(S.pump?Math.sin(T*60)*.012:0);
+ cLed.material.color.set(S.pump?0x33cc66:0xcc3333);dripM.color.set(S.pump?0x2a5f86:0x22262a);
+ var tot=L1+4+12;
+ P.forEach(function(p){if(!S.pump){p.o.visible=false;p.d=-(p.i%12)*.9;return;}p.d+=3.2*dt;if(p.d>tot)p.d-=tot+(p.i%5)*.4;
+  if(p.d<0){p.o.visible=false;return;}var q=ppos(p);p.o.position.set(q[0],q[1],q[2]);p.o.visible=true;});
+ rA.forEach(function(r,i){var ph=((T*.6+i/3)%1);r.scale.setScalar(.3+ph*2.4);r.material.opacity=(1-ph)*.7;});
+ if(idle)cam.th+=dt*.08;
+ if(acc>.25){acc=0;draw();ui();}
+ place();renderer.render(scene,camera);
+ var w=window.innerWidth,h=window.innerHeight;
+ LB.forEach(function(l){var v=l.v.clone().project(camera);if(!S.labels||v.z>1){l.d.style.display='none';return;}l.d.style.display='block';l.d.style.left=((v.x*.5+.5)*w)+'px';l.d.style.top=((-v.y*.5+.5)*h)+'px';});
+}
+draw();requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
